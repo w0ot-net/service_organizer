@@ -10,6 +10,11 @@ import sys
 import xml.etree.ElementTree as ET
 
 DEBUG = False
+EXCLUDED_KEYWORDS = [
+    "httpapi",
+    "ssdp",
+    "upnp",
+]
 
 def debug(msg):
     if DEBUG:
@@ -43,6 +48,18 @@ def is_https(service_info, service_elem):
     if service_info["service_name"] != "https" and service_info["tunnel"] != "ssl":
         return False
     return True
+
+
+def is_excluded_service(service_elem):
+    """Check if service should be excluded based on product/extrainfo."""
+    product = (service_elem.get("product") or "").lower()
+    extrainfo = (service_elem.get("extrainfo") or "").lower()
+    combined = f"{product} {extrainfo}"
+    for excluded in EXCLUDED_KEYWORDS:
+        if excluded in combined:
+            debug(f"  EXCLUDED: matched '{excluded}' in '{combined}'")
+            return True
+    return False
 
 
 def iter_open_tcp_services(root):
@@ -104,6 +121,31 @@ def iter_open_tcp_services(root):
             }
 
             yield target, ip_address, port_num, service, service_info
+
+
+def build_urls(root):
+    urls = []
+    seen = set()
+    for target, ip_address, port_num, service_elem, service_info in iter_open_tcp_services(root):
+        service_name = service_info["service_name"]
+        if service_name not in ("http", "https"):
+            continue
+        if is_excluded_service(service_elem):
+            continue
+        if service_info["tunnel"] == "ssl" or service_name == "https":
+            protocol = "https"
+        else:
+            protocol = "http"
+        if (protocol == "http" and port_num == 80) or (protocol == "https" and port_num == 443):
+            url = f"{protocol}://{target}"
+        else:
+            url = f"{protocol}://{target}:{port_num}"
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+        debug(f"  Port {port_num}: URL YIELDING {url}")
+    return urls
 
 
 def parse_nmap_xml(xml_file):
@@ -189,11 +231,18 @@ def parse_nmap_xml(xml_file):
                 results[name].append(pair)
                 debug(f"  Port {port_num}: {name} YIELDING {pair}")
 
-    return results, results_low, port_targets
+    urls = build_urls(root)
+    return results, results_low, port_targets, urls
 
 
-def write_outputs(results, results_low, port_targets, output_dir):
+def write_outputs(results, results_low, port_targets, urls, output_dir):
     os.makedirs(output_dir, exist_ok=True)
+    urls_file = os.path.join(output_dir, "urls.txt")
+    with open(urls_file, "w") as f:
+        if urls:
+            f.write("\n".join(urls) + "\n")
+    print(f"Wrote {len(urls)} entries to {urls_file}", file=sys.stderr)
+
     for name, pairs in results.items():
         if not pairs:
             continue
@@ -251,7 +300,7 @@ def main():
         DEBUG = True
 
     try:
-        results, results_low, port_ips = parse_nmap_xml(args.xml_file)
+        results, results_low, port_ips, urls = parse_nmap_xml(args.xml_file)
     except FileNotFoundError:
         print(f"Error: File not found: {args.xml_file}", file=sys.stderr)
         sys.exit(1)
@@ -259,7 +308,7 @@ def main():
         print(f"Error: Failed to parse XML: {e}", file=sys.stderr)
         sys.exit(1)
 
-    write_outputs(results, results_low, port_ips, args.output_dir)
+    write_outputs(results, results_low, port_ips, urls, args.output_dir)
 
 
 if __name__ == "__main__":
