@@ -20,18 +20,15 @@ def match_service_name(expected):
     return lambda info, elem: info["service_name"] == expected
 
 
-def is_mssql(service_info):
-    service_name = service_info["service_name"]
+def http_class(service_info):
     combined = service_info["combined"]
-    return "ms-sql" in service_name or "mssql" in service_name or \
-        any(keyword in combined for keyword in ["microsoft sql", "sql server", "mssql"])
-
-
-def is_postgres(service_info):
-    service_name = service_info["service_name"]
-    combined = service_info["combined"]
-    return "postgresql" in service_name or service_name == "postgres" or \
-        any(keyword in combined for keyword in ["postgres", "postgresql"])
+    if "httpapi" in combined:
+        return "httpapi"
+    if "upnp" in combined:
+        return "upnp"
+    if "ssdp" in combined:
+        return "ssdp"
+    return "http"
 
 
 def is_http(service_info, service_elem):
@@ -39,7 +36,7 @@ def is_http(service_info, service_elem):
         return False
     if service_info["tunnel"] == "ssl":
         return False
-    return True
+    return http_class(service_info) == "http"
 
 
 def is_https(service_info, service_elem):
@@ -49,7 +46,7 @@ def is_https(service_info, service_elem):
 
 
 def iter_open_tcp_services(root):
-    """Yield (target, port, service_elem, service_info) for open TCP ports."""
+    """Yield (target, ip_address, port, service_elem, service_info) for open TCP ports."""
     for host in root.findall("host"):
         status = host.find("status")
         if status is not None and status.get("state") != "up":
@@ -95,9 +92,6 @@ def iter_open_tcp_services(root):
 
             service_name = (service.get("name") or "").lower()
             conf = int(service.get("conf") or 0)
-            if conf < 10:
-                debug(f"  Port {port_num}: low-confidence service (conf={conf}), skipping")
-                continue
             tunnel = (service.get("tunnel") or "").lower()
             product = (service.get("product") or "").lower()
             extrainfo = (service.get("extrainfo") or "").lower()
@@ -106,9 +100,10 @@ def iter_open_tcp_services(root):
                 "service_name": service_name,
                 "tunnel": tunnel,
                 "combined": " ".join([service_name, product, extrainfo]),
+                "conf": conf,
             }
 
-            yield target, port_num, service, service_info
+            yield target, ip_address, port_num, service, service_info
 
 
 def parse_nmap_xml(xml_file):
@@ -116,10 +111,13 @@ def parse_nmap_xml(xml_file):
     root = tree.getroot()
 
     services = {
-        "mssql": {"match": lambda info, elem: is_mssql(info)},
-        "postgres": {"match": lambda info, elem: is_postgres(info)},
+        "mssql": {"match": match_service_name("ms-sql-s")},
+        "postgres": {"match": match_service_name("postgresql")},
         "http": {"match": is_http},
         "https": {"match": is_https},
+        "httpapi": {"match": lambda info, elem: http_class(info) == "httpapi"},
+        "upnp": {"match": lambda info, elem: http_class(info) == "upnp"},
+        "ssdp": {"match": lambda info, elem: http_class(info) == "ssdp"},
         "blackice-icecap": {"match": match_service_name("blackice-icecap")},
         "d-fence": {"match": match_service_name("d-fence")},
         "domain": {"match": match_service_name("domain")},
@@ -159,28 +157,69 @@ def parse_nmap_xml(xml_file):
     }
 
     results = {name: [] for name in services}
+    results_low = {name: [] for name in services}
     seen = {name: set() for name in services}
+    seen_low = {name: set() for name in services}
+    port_targets = {}
+    port_seen = {}
 
-    for target, port_num, service_elem, service_info in iter_open_tcp_services(root):
+    for target, ip_address, port_num, service_elem, service_info in iter_open_tcp_services(root):
+        if port_num not in port_targets:
+            port_targets[port_num] = []
+            port_seen[port_num] = set()
+        if target not in port_seen[port_num]:
+            port_seen[port_num].add(target)
+            port_targets[port_num].append(target)
         for name, service_def in services.items():
             if not service_def["match"](service_info, service_elem):
                 continue
 
             pair = f"{target}:{port_num}"
-            if pair in seen[name]:
-                continue
+            is_low_conf = service_info["conf"] < 10
+            if is_low_conf:
+                if pair in seen_low[name]:
+                    continue
+                seen_low[name].add(pair)
+                results_low[name].append(pair)
+                debug(f"  Port {port_num}: {name} LOW CONF YIELDING {pair}")
+            else:
+                if pair in seen[name]:
+                    continue
+                seen[name].add(pair)
+                results[name].append(pair)
+                debug(f"  Port {port_num}: {name} YIELDING {pair}")
 
-            seen[name].add(pair)
-            results[name].append(pair)
-            debug(f"  Port {port_num}: {name} YIELDING {pair}")
-
-    return results
+    return results, results_low, port_targets
 
 
-def write_outputs(results, output_dir):
+def write_outputs(results, results_low, port_targets, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     for name, pairs in results.items():
+        if not pairs:
+            continue
         output_file = os.path.join(output_dir, f"{name}.txt")
+        with open(output_file, "w") as f:
+            f.write("\n".join(pairs) + "\n")
+        print(f"Wrote {len(pairs)} entries to {output_file}", file=sys.stderr)
+
+    for port_num in sorted(port_targets):
+        targets = port_targets[port_num]
+        if not targets:
+            continue
+        output_file = os.path.join(output_dir, f"{port_num}.txt")
+        with open(output_file, "w") as f:
+            f.write("\n".join(targets) + "\n")
+        print(f"Wrote {len(targets)} entries to {output_file}", file=sys.stderr)
+
+    low_dir = os.path.join(output_dir, "low_confidence")
+    low_written = False
+    for name, pairs in results_low.items():
+        if not pairs:
+            continue
+        if not low_written:
+            os.makedirs(low_dir, exist_ok=True)
+            low_written = True
+        output_file = os.path.join(low_dir, f"{name}.txt")
         with open(output_file, "w") as f:
             f.write("\n".join(pairs) + "\n")
         print(f"Wrote {len(pairs)} entries to {output_file}", file=sys.stderr)
@@ -212,7 +251,7 @@ def main():
         DEBUG = True
 
     try:
-        results = parse_nmap_xml(args.xml_file)
+        results, results_low, port_ips = parse_nmap_xml(args.xml_file)
     except FileNotFoundError:
         print(f"Error: File not found: {args.xml_file}", file=sys.stderr)
         sys.exit(1)
@@ -220,7 +259,7 @@ def main():
         print(f"Error: Failed to parse XML: {e}", file=sys.stderr)
         sys.exit(1)
 
-    write_outputs(results, args.output_dir)
+    write_outputs(results, results_low, port_ips, args.output_dir)
 
 
 if __name__ == "__main__":
