@@ -11,25 +11,9 @@ import xml.etree.ElementTree as ET
 
 DEBUG = False
 
-EXCLUDED_HTTP_KEYWORDS = [
-    "httpapi",
-    "ssdp",
-    "upnp",
-]
-
-
 def debug(msg):
     if DEBUG:
         print(f"[DEBUG] {msg}", file=sys.stderr)
-
-
-def is_excluded_http(service_elem):
-    """Check if service should be excluded based on product/extrainfo."""
-    product = (service_elem.get("product") or "").lower()
-    extrainfo = (service_elem.get("extrainfo") or "").lower()
-    combined = product + " " + extrainfo
-
-    return any(keyword in combined for keyword in EXCLUDED_HTTP_KEYWORDS)
 
 
 def match_service_name(expected):
@@ -55,13 +39,13 @@ def is_http(service_info, service_elem):
         return False
     if service_info["tunnel"] == "ssl":
         return False
-    return not is_excluded_http(service_elem)
+    return True
 
 
 def is_https(service_info, service_elem):
     if service_info["service_name"] != "https" and service_info["tunnel"] != "ssl":
         return False
-    return not is_excluded_http(service_elem)
+    return True
 
 
 def iter_open_tcp_services(root):
