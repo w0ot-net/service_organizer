@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 DEBUG = False
-EXCLUDED_KEYWORDS = [
+URLS_TXT_EXCLUDED_KEYWORDS = [
     "httpapi",
     "ssdp",
     "upnp",
@@ -21,41 +21,12 @@ def debug(msg):
         print(f"[DEBUG] {msg}", file=sys.stderr)
 
 
-def match_service_name(expected):
-    return lambda info, elem: info["service_name"] == expected
-
-
-def http_class(service_info):
-    combined = service_info["combined"]
-    if "httpapi" in combined:
-        return "httpapi"
-    if "upnp" in combined:
-        return "upnp"
-    if "ssdp" in combined:
-        return "ssdp"
-    return "http"
-
-
-def is_http(service_info, service_elem):
-    if service_info["service_name"] != "http":
-        return False
-    if service_info["tunnel"] == "ssl":
-        return False
-    return http_class(service_info) == "http"
-
-
-def is_https(service_info, service_elem):
-    if service_info["service_name"] != "https" and service_info["tunnel"] != "ssl":
-        return False
-    return True
-
-
 def is_excluded_service(service_elem):
-    """Check if service should be excluded based on product/extrainfo."""
+    """Check if service should be excluded from urls.txt based on product/extrainfo."""
     product = (service_elem.get("product") or "").lower()
     extrainfo = (service_elem.get("extrainfo") or "").lower()
     combined = f"{product} {extrainfo}"
-    for excluded in EXCLUDED_KEYWORDS:
+    for excluded in URLS_TXT_EXCLUDED_KEYWORDS:
         if excluded in combined:
             debug(f"  EXCLUDED: matched '{excluded}' in '{combined}'")
             return True
@@ -152,56 +123,10 @@ def parse_nmap_xml(xml_file):
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
-    services = {
-        "mssql": {"match": match_service_name("ms-sql-s")},
-        "postgres": {"match": match_service_name("postgresql")},
-        "http": {"match": is_http},
-        "https": {"match": is_https},
-        "httpapi": {"match": lambda info, elem: http_class(info) == "httpapi"},
-        "upnp": {"match": lambda info, elem: http_class(info) == "upnp"},
-        "ssdp": {"match": lambda info, elem: http_class(info) == "ssdp"},
-        "blackice-icecap": {"match": match_service_name("blackice-icecap")},
-        "d-fence": {"match": match_service_name("d-fence")},
-        "domain": {"match": match_service_name("domain")},
-        "domain-s": {"match": match_service_name("domain-s")},
-        "http-proxy": {"match": match_service_name("http-proxy")},
-        "https-alt": {"match": match_service_name("https-alt")},
-        "ipcam": {"match": match_service_name("ipcam")},
-        "iscsi": {"match": match_service_name("iscsi")},
-        "kerberos-sec": {"match": match_service_name("kerberos-sec")},
-        "kpasswd5": {"match": match_service_name("kpasswd5")},
-        "ldap": {"match": match_service_name("ldap")},
-        "mc-nmf": {"match": match_service_name("mc-nmf")},
-        "memcached": {"match": match_service_name("memcached")},
-        "microsoft-ds": {"match": match_service_name("microsoft-ds")},
-        "ms-cluster-net": {"match": match_service_name("ms-cluster-net")},
-        "ms-wbt-server": {"match": match_service_name("ms-wbt-server")},
-        "mshvlm": {"match": match_service_name("mshvlm")},
-        "msmq": {"match": match_service_name("msmq")},
-        "msrpc": {"match": match_service_name("msrpc")},
-        "ncacn_http": {"match": match_service_name("ncacn_http")},
-        "netbios-ssn": {"match": match_service_name("netbios-ssn")},
-        "pando-pub": {"match": match_service_name("pando-pub")},
-        "papachi-p2p-srv": {"match": match_service_name("papachi-p2p-srv")},
-        "pcsync-http": {"match": match_service_name("pcsync-http")},
-        "rtsp": {"match": match_service_name("rtsp")},
-        "rxmon": {"match": match_service_name("rxmon")},
-        "slx": {"match": match_service_name("slx")},
-        "smtp": {"match": match_service_name("smtp")},
-        "soap": {"match": match_service_name("soap")},
-        "ssh": {"match": match_service_name("ssh")},
-        "tcpwrapped": {"match": match_service_name("tcpwrapped")},
-        "telnet": {"match": match_service_name("telnet")},
-        "unknown": {"match": match_service_name("unknown")},
-        "us-srv": {"match": match_service_name("us-srv")},
-        "vmrdp": {"match": match_service_name("vmrdp")},
-        "vrml-multi-use": {"match": match_service_name("vrml-multi-use")},
-    }
-
-    results = {name: [] for name in services}
-    results_low = {name: [] for name in services}
-    seen = {name: set() for name in services}
-    seen_low = {name: set() for name in services}
+    results = {}
+    results_low = {}
+    seen = {}
+    seen_low = {}
     port_targets = {}
     port_seen = {}
 
@@ -212,24 +137,27 @@ def parse_nmap_xml(xml_file):
         if target not in port_seen[port_num]:
             port_seen[port_num].add(target)
             port_targets[port_num].append(target)
-        for name, service_def in services.items():
-            if not service_def["match"](service_info, service_elem):
-                continue
+        service_name = service_info["service_name"] or "unknown"
+        if service_name not in results:
+            results[service_name] = []
+            results_low[service_name] = []
+            seen[service_name] = set()
+            seen_low[service_name] = set()
 
-            pair = f"{target}:{port_num}"
-            is_low_conf = service_info["conf"] < 10
-            if is_low_conf:
-                if pair in seen_low[name]:
-                    continue
-                seen_low[name].add(pair)
-                results_low[name].append(pair)
-                debug(f"  Port {port_num}: {name} LOW CONF YIELDING {pair}")
-            else:
-                if pair in seen[name]:
-                    continue
-                seen[name].add(pair)
-                results[name].append(pair)
-                debug(f"  Port {port_num}: {name} YIELDING {pair}")
+        pair = f"{target}:{port_num}"
+        is_low_conf = service_info["conf"] < 10
+        if is_low_conf:
+            if pair in seen_low[service_name]:
+                continue
+            seen_low[service_name].add(pair)
+            results_low[service_name].append(pair)
+            debug(f"  Port {port_num}: {service_name} LOW CONF YIELDING {pair}")
+        else:
+            if pair in seen[service_name]:
+                continue
+            seen[service_name].add(pair)
+            results[service_name].append(pair)
+            debug(f"  Port {port_num}: {service_name} YIELDING {pair}")
 
     urls = build_urls(root)
     return results, results_low, port_targets, urls
@@ -243,7 +171,8 @@ def write_outputs(results, results_low, port_targets, urls, output_dir):
             f.write("\n".join(urls) + "\n")
     print(f"Wrote {len(urls)} entries to {urls_file}", file=sys.stderr)
 
-    for name, pairs in results.items():
+    for name in sorted(results):
+        pairs = results[name]
         if not pairs:
             continue
         output_file = os.path.join(output_dir, f"{name}.txt")
@@ -262,7 +191,8 @@ def write_outputs(results, results_low, port_targets, urls, output_dir):
 
     low_dir = os.path.join(output_dir, "low_confidence")
     low_written = False
-    for name, pairs in results_low.items():
+    for name in sorted(results_low):
+        pairs = results_low[name]
         if not pairs:
             continue
         if not low_written:
