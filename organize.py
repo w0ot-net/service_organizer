@@ -5,6 +5,7 @@ Prefers hostnames over IPs when available.
 """
 
 import argparse
+import csv
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -99,11 +100,11 @@ def build_urls(root):
     seen = set()
     for target, ip_address, port_num, service_elem, service_info in iter_open_tcp_services(root):
         service_name = service_info["service_name"]
-        if service_name not in ("http", "https"):
+        if "http" not in service_name:
             continue
         if is_excluded_service(service_elem):
             continue
-        if service_info["tunnel"] == "ssl" or service_name == "https":
+        if service_info["tunnel"] == "ssl" or "https" in service_name:
             protocol = "https"
         else:
             protocol = "http"
@@ -159,11 +160,26 @@ def parse_nmap_xml(xml_file):
             results[service_name].append(pair)
             debug(f"  Port {port_num}: {service_name} YIELDING {pair}")
 
+    affected = []
+    affected_seen = set()
+    for target, ip_address, port_num, service_elem, service_info in iter_open_tcp_services(root):
+        key = (ip_address, port_num)
+        if key in affected_seen:
+            continue
+        affected_seen.add(key)
+        hostname = target if target != ip_address else "-"
+        service_name = service_info["service_name"] or "unknown"
+        affected.append({
+            "IP Address": ip_address,
+            "Hostname": hostname,
+            "Service": f"{service_name} ({port_num}/tcp)",
+        })
+
     urls = build_urls(root)
-    return results, results_low, port_targets, urls
+    return results, results_low, port_targets, urls, affected
 
 
-def write_outputs(results, results_low, port_targets, urls, output_dir):
+def write_outputs(results, results_low, port_targets, urls, affected, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     urls_file = os.path.join(output_dir, "urls.txt")
     with open(urls_file, "w") as f:
@@ -188,6 +204,13 @@ def write_outputs(results, results_low, port_targets, urls, output_dir):
         with open(output_file, "w") as f:
             f.write("\n".join(targets) + "\n")
         print(f"Wrote {len(targets)} entries to {output_file}", file=sys.stderr)
+
+    affected_file = os.path.join(output_dir, "affected_systems.csv")
+    with open(affected_file, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["IP Address", "Hostname", "Service"])
+        writer.writeheader()
+        writer.writerows(affected)
+    print(f"Wrote {len(affected)} entries to {affected_file}", file=sys.stderr)
 
     low_dir = os.path.join(output_dir, "low_confidence")
     low_written = False
@@ -230,7 +253,7 @@ def main():
         DEBUG = True
 
     try:
-        results, results_low, port_ips, urls = parse_nmap_xml(args.xml_file)
+        results, results_low, port_ips, urls, affected = parse_nmap_xml(args.xml_file)
     except FileNotFoundError:
         print(f"Error: File not found: {args.xml_file}", file=sys.stderr)
         sys.exit(1)
@@ -238,7 +261,7 @@ def main():
         print(f"Error: Failed to parse XML: {e}", file=sys.stderr)
         sys.exit(1)
 
-    write_outputs(results, results_low, port_ips, urls, args.output_dir)
+    write_outputs(results, results_low, port_ips, urls, affected, args.output_dir)
 
 
 if __name__ == "__main__":
