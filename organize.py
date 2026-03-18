@@ -175,11 +175,22 @@ def parse_nmap_xml(xml_file):
             "Service": f"{service_name} ({port_num}/tcp)",
         })
 
+    tls_targets = []
+    tls_seen = set()
+    for target, ip_address, port_num, service_elem, service_info in iter_open_tcp_services(root):
+        service_name = service_info["service_name"]
+        if service_info["tunnel"] == "ssl" or "ssl" in service_name or "https" in service_name:
+            pair = f"{target}:{port_num}"
+            if pair not in tls_seen:
+                tls_seen.add(pair)
+                tls_targets.append(pair)
+                debug(f"  Port {port_num}: TLS YIELDING {pair}")
+
     urls = build_urls(root)
-    return results, results_low, port_targets, urls, affected
+    return results, results_low, port_targets, urls, affected, tls_targets
 
 
-def write_outputs(results, results_low, port_targets, urls, affected, output_dir):
+def write_outputs(results, results_low, port_targets, urls, affected, tls_targets, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     urls_file = os.path.join(output_dir, "urls.txt")
     with open(urls_file, "w") as f:
@@ -211,6 +222,12 @@ def write_outputs(results, results_low, port_targets, urls, affected, output_dir
         writer.writeheader()
         writer.writerows(affected)
     print(f"Wrote {len(affected)} entries to {affected_file}", file=sys.stderr)
+
+    tls_file = os.path.join(output_dir, "tls.txt")
+    with open(tls_file, "w") as f:
+        if tls_targets:
+            f.write("\n".join(tls_targets) + "\n")
+    print(f"Wrote {len(tls_targets)} entries to {tls_file}", file=sys.stderr)
 
     low_dir = os.path.join(output_dir, "low_confidence")
     low_written = False
@@ -253,7 +270,7 @@ def main():
         DEBUG = True
 
     try:
-        results, results_low, port_ips, urls, affected = parse_nmap_xml(args.xml_file)
+        results, results_low, port_ips, urls, affected, tls_targets = parse_nmap_xml(args.xml_file)
     except FileNotFoundError:
         print(f"Error: File not found: {args.xml_file}", file=sys.stderr)
         sys.exit(1)
@@ -261,7 +278,7 @@ def main():
         print(f"Error: Failed to parse XML: {e}", file=sys.stderr)
         sys.exit(1)
 
-    write_outputs(results, results_low, port_ips, urls, affected, args.output_dir)
+    write_outputs(results, results_low, port_ips, urls, affected, tls_targets, args.output_dir)
 
 
 if __name__ == "__main__":
