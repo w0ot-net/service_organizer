@@ -16,6 +16,18 @@ URLS_TXT_EXCLUDED_KEYWORDS = [
     "ssdp",
     "upnp",
 ]
+TRUSTED_PORT_SERVICES = {
+    443: "https",
+    445: "microsoft-ds",
+    464: "kpasswd5",
+    636: "ldapssl",
+    993: "imaps",
+    995: "pop3s",
+    3269: "globalcatldapssl",
+    5986: "wsmans",
+    8443: "https-alt",
+    9100: "jetdirect",
+}
 
 def debug(msg):
     if DEBUG:
@@ -146,7 +158,7 @@ def parse_nmap_xml(xml_file):
             seen_low[service_name] = set()
 
         pair = f"{target}:{port_num}"
-        is_low_conf = service_info["conf"] < 10
+        is_low_conf = service_info["conf"] < 10 and TRUSTED_PORT_SERVICES.get(port_num) != service_name
         if is_low_conf:
             if pair in seen_low[service_name]:
                 continue

@@ -1,3 +1,5 @@
+Review 1 completed: 2026-04-04
+
 # Plan: Trust well-known port/service pairs at any Nmap confidence level
 
 ## Summary
@@ -59,4 +61,10 @@ The allowlist is explicit, auditable, zero-dependency, and trivially extensible.
 
 ## Affected Components
 
-- `organize.py`: Add `TRUSTED_PORT_SERVICES` constant near existing module-level constants; modify the `is_low_conf` expression on line 166.
+- `organize.py`: Add `TRUSTED_PORT_SERVICES` constant near existing module-level constants; modify the `is_low_conf` expression on line 161.
+
+## Execution Notes
+
+- **Executed**: 2026-04-04
+- **Deviations**: Plan referenced line 166 for `is_low_conf`; actual location was line 149 (now line 161 after adding the constant). No logic deviations.
+- **Changes**: Added `TRUSTED_PORT_SERVICES` dict (lines 19-30) and modified `is_low_conf` (line 161) in `organize.py`.
