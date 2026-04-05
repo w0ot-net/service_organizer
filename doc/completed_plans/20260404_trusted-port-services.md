@@ -68,3 +68,4 @@ The allowlist is explicit, auditable, zero-dependency, and trivially extensible.
 - **Executed**: 2026-04-04
 - **Deviations**: Plan referenced line 166 for `is_low_conf`; actual location was line 149 (now line 161 after adding the constant). No logic deviations.
 - **Changes**: Added `TRUSTED_PORT_SERVICES` dict (lines 19-30) and modified `is_low_conf` (line 161) in `organize.py`.
+- **Commit**: `82dc0e0`
